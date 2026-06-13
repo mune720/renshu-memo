@@ -861,6 +861,18 @@ function addEntry(){
   save(); renderExpense(); toast('追加しました');
 }
 $('#expAdd').addEventListener('click', addEntry);
+// 入力しながらカンマ区切りで表示（キャレット位置は維持）
+$('#expAmount').addEventListener('input', () => {
+  const inp = $('#expAmount');
+  const digitsBefore = inp.value.slice(0, inp.selectionStart).replace(/[^\d]/g, '').length;
+  const digits = inp.value.replace(/[^\d]/g, '').slice(0, 9);
+  if (!digits){ inp.value = ''; return; }
+  const formatted = fmtYen(parseInt(digits, 10));
+  inp.value = formatted;
+  let pos = 0, seen = 0;
+  while (pos < formatted.length && seen < digitsBefore){ if (/\d/.test(formatted[pos])) seen++; pos++; }
+  inp.setSelectionRange(pos, pos);
+});
 $('#expAmount').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) $('#expNote').focus(); });
 $('#expNote').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) addEntry(); });
 
