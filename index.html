@@ -761,13 +761,42 @@ $('#newLessonBtn').addEventListener('click', () => {
 $('#btnCopy').addEventListener('click', () => {
   const bs = cur().blocks.filter(b => b.text.trim() !== '');
   if (!bs.length){ toast('コピーする内容がありません'); return; }
-  const text = bs.map(b => b.text.replace(/^\n+|\n+$/g, '')).join('\n\n');
-  if (navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).then(
-      () => toast(`${bs.length}件をコピーしました`),
-      () => toast('コピーできませんでした。もう一度お試しください'));
-  } else { toast('この環境ではコピーできません'); }
+  const withTime = state.showTime;            // 時刻表示ONのときだけ時刻も含める
+  const plain = bs.map(b => {
+    const body = b.text.replace(/^\n+|\n+$/g, '');
+    return (withTime && b.createdAt) ? fmtTime(b.createdAt) + '\n' + body : body;
+  }).join('\n\n');
+  // フォント保持用のHTML（リッチテキスト対応アプリに貼ると明朝/ゴシックも再現される）
+  const html = bs.map(b => {
+    const body = esc(b.text.replace(/^\n+|\n+$/g, '')).replace(/\n/g, '<br>');
+    const font = b.resolved
+      ? "'Hiragino Mincho ProN','Hiragino Mincho Pro',serif"
+      : "'Hiragino Kaku Gothic ProN','Hiragino Sans',sans-serif";
+    const time = (withTime && b.createdAt)
+      ? `<div style="font-size:12px;color:#8a8a8f">${esc(fmtTime(b.createdAt))}</div>` : '';
+    return `<div style="font-family:${font};margin:0 0 14px;white-space:pre-wrap">${time}<div>${body}</div></div>`;
+  }).join('');
+  copyRich(plain, html, `${bs.length}件をコピーしました`);
 });
+function copyRich(plain, html, ok){
+  if (navigator.clipboard && window.ClipboardItem){
+    try{
+      const item = new ClipboardItem({
+        'text/plain': new Blob([plain], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' }),
+      });
+      navigator.clipboard.write([item]).then(() => toast(ok), () => copyPlain(plain, ok));
+      return;
+    }catch(e){ /* 非対応ならプレーンへ */ }
+  }
+  copyPlain(plain, ok);
+}
+function copyPlain(plain, ok){
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(plain).then(
+      () => toast(ok), () => toast('コピーできませんでした。もう一度お試しください'));
+  } else { toast('この環境ではコピーできません'); }
+}
 
 $('#btnTime').addEventListener('click', () => {
   state.showTime = !state.showTime;
