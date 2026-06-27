@@ -76,10 +76,6 @@ textarea{
   font:inherit; font-size:17px; line-height:1.7; color:inherit;
   padding:0; outline:none; overflow:hidden;
 }
-textarea.resolved, .card.resolved .body{
-  font-family:"Hiragino Mincho ProN","Hiragino Mincho Pro",serif;
-  color:var(--ink-soft);
-}
 #tail{ min-height:42vh; }
 /* 整理モードのカード */
 .card{
@@ -90,9 +86,6 @@ body.organize .block{ margin-bottom:12px; }
 .chead{ display:flex; align-items:center; gap:8px; min-height:30px; }
 .chead .time{ margin:0; flex:1; }
 body:not(.show-time) .chead .time{ display:block; visibility:hidden; }
-.rtag{ display:none; font-size:11px; color:var(--accent); border:1px solid var(--accent);
-       border-radius:9px; padding:1px 7px; flex-shrink:0; }
-.card.resolved .rtag{ display:inline-block; }
 .chip{
   font:inherit; font-size:13px; padding:6px 13px; border-radius:15px; flex-shrink:0;
   min-width:44px; border:1px dashed var(--line); background:transparent; color:var(--ink-soft);
@@ -369,7 +362,7 @@ let expMonth = { y: now0.getFullYear(), m: now0.getMonth() + 1 };
 function newLessonObj(){ return { id: uid(), createdAt: Date.now(), blocks: [] }; }
 function normBlock(b){
   return { id: b.id || uid(), text: b.text || '', createdAt: b.createdAt || null,
-           resolved: !!b.resolved, category: b.category || null };
+           category: b.category || null };
 }
 function normLesson(l){
   if (!l || !Array.isArray(l.blocks)) return null;
@@ -481,7 +474,7 @@ function fmtTime(t){
 }
 function newBlock(text, src){
   return { id: uid(), text: text || '', createdAt: text && text.trim() ? Date.now() : null,
-           resolved: src ? !!src.resolved : false, category: src ? src.category : null };
+           category: src ? src.category : null };
 }
 
 function renderAll(){ if (view === 'expense') renderExpense(); else render(); updateLessonTitle(); }
@@ -544,7 +537,6 @@ function makeEditBlock(b){
   const ta = document.createElement('textarea');
   ta.value = b.text; ta.rows = 1; ta.dataset.id = b.id; ta.autocapitalize = 'off';
   if (blocks.length === 1 && !b.text) ta.placeholder = '気付きをメモ…（改行2つで区切り）';
-  if (b.resolved) ta.classList.add('resolved');
   ta.addEventListener('compositionstart', () => { composing = true; });
   ta.addEventListener('compositionend', () => { composing = false; onInput(b, ta); });
   ta.addEventListener('input', () => {
@@ -633,24 +625,15 @@ $('#tail').addEventListener('click', () => {
 });
 
 function makeCard(b){
-  const card = el('div', 'block card' + (b.resolved ? ' resolved' : ''));
+  const card = el('div', 'block card');
   const head = el('div', 'chead');
   head.appendChild(timeNode(b));
-  const rtag = el('span', 'rtag'); rtag.textContent = '解決'; head.appendChild(rtag);
   const chip = el('button', 'chip' + (b.category ? ' has' : ''));
   chip.textContent = b.category || '＋';
-  chip.addEventListener('click', e => { e.stopPropagation(); openPicker(b); });
+  chip.addEventListener('click', () => openPicker(b));
   head.appendChild(chip);
   card.appendChild(head);
   const body = el('div', 'body'); body.textContent = b.text; card.appendChild(body);
-  // 本文をドラッグ選択している間はタップ扱いしない（誤って解決が切り替わるのを防ぐ）
-  card.addEventListener('click', () => {
-    const sel = window.getSelection && window.getSelection();
-    if (sel && sel.toString().length) return;
-    b.resolved = !b.resolved;
-    card.classList.toggle('resolved', b.resolved);
-    save();
-  });
   return card;
 }
 
@@ -762,41 +745,16 @@ $('#btnCopy').addEventListener('click', () => {
   const bs = cur().blocks.filter(b => b.text.trim() !== '');
   if (!bs.length){ toast('コピーする内容がありません'); return; }
   const withTime = state.showTime;            // 時刻表示ONのときだけ時刻も含める
-  const plain = bs.map(b => {
+  const text = bs.map(b => {
     const body = b.text.replace(/^\n+|\n+$/g, '');
     return (withTime && b.createdAt) ? fmtTime(b.createdAt) + '\n' + body : body;
   }).join('\n\n');                            // ブロック間は空行（＝日付の前に1行空く）
-  // フォント保持用のHTML。プレーンと同じく <br><br> で空行を作り、貼り付け先でも詰まらないようにする
-  const html = bs.map(b => {
-    const font = b.resolved
-      ? "'Hiragino Mincho ProN','Hiragino Mincho Pro',serif"
-      : "'Hiragino Kaku Gothic ProN','Hiragino Sans',sans-serif";
-    const lines = [];
-    if (withTime && b.createdAt) lines.push(`<span style="color:#8a8a8f">${esc(fmtTime(b.createdAt))}</span>`);
-    lines.push(esc(b.text.replace(/^\n+|\n+$/g, '')).replace(/\n/g, '<br>'));
-    return `<span style="font-family:${font}">${lines.join('<br>')}</span>`;
-  }).join('<br><br>');
-  copyRich(plain, `<div>${html}</div>`, `${bs.length}件をコピーしました`);
-});
-function copyRich(plain, html, ok){
-  if (navigator.clipboard && window.ClipboardItem){
-    try{
-      const item = new ClipboardItem({
-        'text/plain': new Blob([plain], { type: 'text/plain' }),
-        'text/html': new Blob([html], { type: 'text/html' }),
-      });
-      navigator.clipboard.write([item]).then(() => toast(ok), () => copyPlain(plain, ok));
-      return;
-    }catch(e){ /* 非対応ならプレーンへ */ }
-  }
-  copyPlain(plain, ok);
-}
-function copyPlain(plain, ok){
   if (navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(plain).then(
-      () => toast(ok), () => toast('コピーできませんでした。もう一度お試しください'));
+    navigator.clipboard.writeText(text).then(
+      () => toast(`${bs.length}件をコピーしました`),
+      () => toast('コピーできませんでした。もう一度お試しください'));
   } else { toast('この環境ではコピーできません'); }
-}
+});
 
 $('#btnTime').addEventListener('click', () => {
   state.showTime = !state.showTime;
