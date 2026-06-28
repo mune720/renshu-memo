@@ -234,8 +234,9 @@ svg .val{ font-size:9px; fill:var(--ink-soft); }
 <body>
 <header>
   <div id="tabs" class="seg2">
-    <button data-tab="memo" class="on">メモ</button>
-    <button data-tab="expense">家計簿</button>
+    <button data-tab="kizuki" class="on">気付き</button>
+    <button data-tab="oboe">覚え書き</button>
+    <button data-tab="expense" hidden>家計簿</button>
   </div>
 </header>
 
@@ -349,8 +350,10 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 const fmtYen = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const fmtYenShort = n => n >= 10000 ? (n/10000).toFixed(n % 10000 ? 1 : 0) + '万' : fmtYen(n);
 
+const ENABLE_EXPENSE = false;  // 家計簿を表示するなら true（コード・データは保持。復活はこれだけ）
 let mode = 'edit';          // 'edit' | 'organize'
 let groupBy = 'time';       // 'time' | 'category'
+let section = 'kizuki';     // 'kizuki'(気付き) | 'oboe'(覚え書き)
 let view = 'memo';          // 'memo' | 'expense'
 let expSub = 'input';       // 'input' | 'chart'
 let composing = false;
@@ -359,7 +362,7 @@ const now0 = new Date();
 let expMonth = { y: now0.getFullYear(), m: now0.getMonth() + 1 };
 
 /* ---------- データ ---------- */
-function newLessonObj(){ return { id: uid(), createdAt: Date.now(), blocks: [] }; }
+function newLessonObj(){ return { id: uid(), createdAt: Date.now(), blocks: [], notes: [] }; }
 function normBlock(b){
   return { id: b.id || uid(), text: b.text || '', createdAt: b.createdAt || null,
            category: b.category || null };
@@ -367,7 +370,8 @@ function normBlock(b){
 function normLesson(l){
   if (!l || !Array.isArray(l.blocks)) return null;
   return { id: l.id || uid(), createdAt: l.createdAt || Date.now(),
-           blocks: l.blocks.filter(b => (b.text || '').trim() !== '').map(normBlock) };
+           blocks: l.blocks.filter(b => (b.text || '').trim() !== '').map(normBlock),
+           notes: (Array.isArray(l.notes) ? l.notes : []).filter(b => (b.text || '').trim() !== '').map(normBlock) };
 }
 function normEntry(e){
   const amount = Math.round(+e.amount);
@@ -405,7 +409,7 @@ function load(){
     if (d && Array.isArray(d.blocks)){             // v1 → 1レッスンに移行
       const blocks = d.blocks.filter(b => (b.text || '').trim() !== '').map(normBlock);
       const createdAt = blocks.reduce((m, b) => (b.createdAt && (!m || b.createdAt < m)) ? b.createdAt : m, null) || Date.now();
-      const l = { id: uid(), createdAt, blocks };
+      const l = { id: uid(), createdAt, blocks, notes: [] };
       return { lessons: [l], activeLessonId: l.id,
                categories: Array.isArray(d.categories) ? d.categories : [],
                showTime: !!d.showTime, expense: normExpense(null) };
@@ -423,8 +427,11 @@ function cur(){
   let l = state.lessons.find(x => x.id === state.activeLessonId);
   if (!l) l = state.lessons[state.lessons.length - 1];
   if (!l){ l = newLessonObj(); state.lessons.push(l); state.activeLessonId = l.id; }
+  if (!Array.isArray(l.notes)) l.notes = [];
   return l;
 }
+// 表示中の欄のブロック配列（気付き or 覚え書き）
+function curList(){ return section === 'oboe' ? cur().notes : cur().blocks; }
 
 let saveTimer = null;
 function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(persist, 250); }
@@ -432,7 +439,8 @@ function serialize(){
   const lessons = state.lessons.map(l => ({
     id: l.id, createdAt: l.createdAt,
     blocks: l.blocks.filter(b => b.text.trim() !== ''),
-  })).filter(l => l.blocks.length > 0 || l.id === state.activeLessonId);
+    notes: (l.notes || []).filter(b => b.text.trim() !== ''),
+  })).filter(l => l.blocks.length > 0 || l.notes.length > 0 || l.id === state.activeLessonId);
   return JSON.stringify({
     v: 2, lessons, activeLessonId: state.activeLessonId,
     categories: state.categories, showTime: state.showTime,
@@ -481,19 +489,25 @@ function renderAll(){ if (view === 'expense') renderExpense(); else render(); up
 
 /* ===================== メモ ===================== */
 function render(){
+  // 覚え書きは「整理」なし（カテゴリーなし）。常に編集モード
+  const isOboe = section === 'oboe';
+  if (isOboe) mode = 'edit';
   document.body.classList.toggle('organize', mode === 'organize');
   document.body.classList.toggle('show-time', state.showTime);
   $('#btnTime').classList.toggle('on', state.showTime);
+  $('#btnOrganize').hidden = isOboe;
   $('#btnOrganize').classList.toggle('on', mode === 'organize');
   $('#btnOrganize').textContent = mode === 'organize' ? '完了' : '整理';
-  $('#seg').hidden = mode !== 'organize';
+  $('#seg').hidden = isOboe || mode !== 'organize';
   $('#seg [data-g="time"]').classList.toggle('on', groupBy === 'time');
   $('#seg [data-g="category"]').classList.toggle('on', groupBy === 'category');
+  $('#tabs [data-tab="kizuki"]').classList.toggle('on', !isOboe);
+  $('#tabs [data-tab="oboe"]').classList.toggle('on', isOboe);
   updateLessonTitle();
 
-  const blocksAll = cur().blocks;
+  const blocksAll = curList();
   const list = $('#list');
-  list.innerHTML = '';
+  list.replaceChildren();
   if (mode === 'edit'){
     if (blocksAll.length === 0) blocksAll.push(newBlock(''));
     blocksAll.forEach(b => list.appendChild(makeEditBlock(b)));
@@ -530,13 +544,14 @@ function timeNode(b){
 }
 
 function makeEditBlock(b){
-  const blocks = cur().blocks;
+  const blocks = curList();
   const wrap = el('div', 'block');
   wrap.dataset.id = b.id;
   wrap.appendChild(timeNode(b));
   const ta = document.createElement('textarea');
   ta.value = b.text; ta.rows = 1; ta.dataset.id = b.id; ta.autocapitalize = 'off';
-  if (blocks.length === 1 && !b.text) ta.placeholder = '気付きをメモ…（改行2つで区切り）';
+  if (blocks.length === 1 && !b.text)
+    ta.placeholder = (section === 'oboe' ? 'レッスンの覚え書き…' : '気付きをメモ…') + '（改行2つで区切り）';
   ta.addEventListener('compositionstart', () => { composing = true; });
   ta.addEventListener('compositionend', () => { composing = false; onInput(b, ta); });
   ta.addEventListener('input', () => {
@@ -569,7 +584,7 @@ function splitParts(value){
   return parts;
 }
 function splitBlock(b, ta){
-  const blocks = cur().blocks;
+  const blocks = curList();
   const caret = ta.selectionStart;
   const parts = splitParts(ta.value);
   let focusIdx = parts.length - 1, focusOff = 0;
@@ -596,7 +611,7 @@ function splitBlock(b, ta){
 function onKeydown(e, b, ta){
   if (e.key !== 'Backspace' || composing || e.isComposing) return;
   if (ta.selectionStart !== 0 || ta.selectionEnd !== 0) return;
-  const blocks = cur().blocks;
+  const blocks = curList();
   const idx = blocks.indexOf(b);
   if (idx <= 0) return;
   e.preventDefault();
@@ -617,7 +632,7 @@ function onKeydown(e, b, ta){
 }
 $('#tail').addEventListener('click', () => {
   if (mode !== 'edit') return;
-  const blocks = cur().blocks;
+  const blocks = curList();
   let b = blocks[blocks.length - 1];
   if (!b || b.text.trim() !== ''){ b = newBlock(''); blocks.push(b); $('#list').appendChild(makeEditBlock(b)); }
   const ta = document.querySelector(`textarea[data-id="${b.id}"]`);
@@ -642,7 +657,6 @@ let pickerTarget = null;
 function openPicker(b){ pickerTarget = b; renderPicker(); openSheet('#picker'); }
 function renderPicker(){
   const listEl = $('#catList'); listEl.innerHTML = '';
-  const blocks = cur().blocks;
   const allBlocks = state.lessons.flatMap(l => l.blocks);
   const curVal = pickerTarget ? (pickerTarget.category || null) : null;
   const mkRow = (label, value) => {
@@ -681,8 +695,9 @@ function addCategory(){
 
 /* ---------- レッスン ---------- */
 function lessonDate(l){
-  const b = l.blocks.find(x => x.createdAt);
-  return b ? b.createdAt : l.createdAt;
+  const all = [...l.blocks, ...(l.notes || [])];
+  const ts = all.map(x => x.createdAt).filter(Boolean);
+  return ts.length ? Math.min(...ts) : l.createdAt;
 }
 function updateLessonTitle(){
   const l = cur();
@@ -697,7 +712,9 @@ function renderLessons(){
     const row = el('button', 'row' + (l.id === state.activeLessonId ? ' current' : ''));
     const check = el('span', 'check'); check.textContent = l.id === state.activeLessonId ? '✓' : '';
     const lab = el('span', 'label');
-    const nonEmpty = l.blocks.filter(b => b.text.trim());
+    const kz = l.blocks.filter(b => b.text.trim());
+    const ob = (l.notes || []).filter(b => b.text.trim());
+    const nonEmpty = kz.length ? kz : ob;
     const d = new Date(lessonDate(l));
     const title = document.createTextNode(`${d.getMonth()+1}月${d.getDate()}日 のレッスン`);
     lab.appendChild(title);
@@ -705,7 +722,9 @@ function renderLessons(){
     prev.textContent = nonEmpty.length ? nonEmpty[0].text.replace(/\n/g, ' ').slice(0, 28) : '（空）';
     lab.appendChild(prev);
     row.appendChild(check); row.appendChild(lab);
-    const sub = el('span', 'sub'); sub.textContent = `${nonEmpty.length}件`; row.appendChild(sub);
+    const sub = el('span', 'sub');
+    sub.textContent = ob.length ? `気付き${kz.length}・覚え書き${ob.length}` : `${kz.length}件`;
+    row.appendChild(sub);
     if (state.lessons.length > 1){
       const del = el('span', 'del'); del.textContent = '削除';
       del.addEventListener('click', e => {
@@ -733,16 +752,17 @@ function deleteLesson(id){
 }
 $('#newLessonBtn').addEventListener('click', () => {
   const c = cur();
-  if (c.blocks.filter(b => b.text.trim()).length === 0){ toast('今のレッスンはまだ空です'); return; }
+  const used = c.blocks.filter(b => b.text.trim()).length + (c.notes || []).filter(b => b.text.trim()).length;
+  if (used === 0){ toast('今のレッスンはまだ空です'); return; }
   const l = newLessonObj(); state.lessons.push(l); state.activeLessonId = l.id;
   mode = 'edit'; groupBy = 'time';
   persist(); closeSheets(); render(); window.scrollTo(0, 0);
   toast('新しいレッスンを始めました');
 });
 
-/* ---------- コピー（1タップで全文） ---------- */
+/* ---------- コピー（1タップで全文・表示中の欄） ---------- */
 $('#btnCopy').addEventListener('click', () => {
-  const bs = cur().blocks.filter(b => b.text.trim() !== '');
+  const bs = curList().filter(b => b.text.trim() !== '');
   if (!bs.length){ toast('コピーする内容がありません'); return; }
   const withTime = state.showTime;            // 時刻表示ONのときだけ時刻も含める
   const text = bs.map(b => {
@@ -972,14 +992,23 @@ function closeSheets(){
 }
 $('#overlay').addEventListener('click', closeSheets);
 
-document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => setView(b.dataset.tab)));
-function setView(v){
-  view = v;
-  $('#memoView').hidden = v !== 'memo';
-  $('#expenseView').hidden = v !== 'expense';
-  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === v));
-  if (v === 'expense') renderExpense(); else render();
+document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+function setTab(t){
+  if (t === 'expense'){
+    if (!ENABLE_EXPENSE) return;
+    view = 'expense';
+    $('#memoView').hidden = true; $('#expenseView').hidden = false;
+    renderExpense();
+  } else {
+    view = 'memo';
+    section = t;                 // 'kizuki' | 'oboe'
+    if (section === 'oboe') mode = 'edit';
+    $('#expenseView').hidden = true; $('#memoView').hidden = false;
+    render();
+  }
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
 }
+if (ENABLE_EXPENSE) $('#tabs [data-tab="expense"]').hidden = false;
 
 let toastTimer = null;
 function toast(msg){
